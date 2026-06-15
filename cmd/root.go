@@ -5,7 +5,10 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -48,8 +51,10 @@ func init() {
 }
 
 /*
-** Report command
+** Commands
 */
+
+// counts instances of this type of file in the give tree.
 var reportCmd = &cobra.Command{
 	Use:   "report <inpath> <filetype>",
 	Short: "Count the number of this filetype in the inpath tree",
@@ -60,15 +65,51 @@ var reportCmd = &cobra.Command{
 		}
 		path := args[0]
 		ext := args[1]
-
+		if !strings.HasPrefix(ext,".") {
+			ext = "." + ext
+		}
 		_, err := os.Stat(path)
 		if err != nil {
 			return err 
 		}
 		
-		// need to check that the extension is in the required format
-		fmt.Printf("Reporting, %s in %s\n",ext, path)
+		// setup the action
+		var fileCount = 0;
+		act := func (string) {
+    		fileCount++
+		}
+
+		// setup the id function
+		id := func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			tgtExt := filepath.Ext(d.Name())
+			if ext == tgtExt {
+				act(path)
+			}
+			//fmt.Printf("%s %s : %s\n", d.Name(), ext, tgtExt)
+			return nil
+
+		}
+		// Walk the tree
+		err = filepath.WalkDir(path,id)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Found %d %s files in %s\n", fileCount, ext, path)
 		return nil
 	},
 }
+
+
+/*
+** Utility functions
+*/
+
+type IdFn func(string,string) error
+type ActionFn func(string) bool
 
