@@ -4,6 +4,7 @@ Copyright © 2026 Paul Chubb <paulc@singlespoon.org>
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,18 +15,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+/*
+** Cobra framework stuff
+ */
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "embconvert",
 	Short: "does actions on a tree of files",
-	Long: `Walks a directory tree and does actions on found matching files:
-	- copy: copy matching file to outpath
-	- pdf: create metadata pdf from file
-	- json: create json metadata files
-	- report: count matching files`,
+	Long: `Walks a directory tree and does actions on found matching files`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+    //Run: func(cmd *cobra.Command, args []string) { },
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -50,12 +51,15 @@ func init() {
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	//rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 /*
 ** Commands
 */
+
+// define our call back interface
+type ActionFn func(string, string) error
 
 // counts instances of this type of file in the give tree.
 var reportCmd = &cobra.Command{
@@ -78,12 +82,13 @@ var reportCmd = &cobra.Command{
 		
 		// setup the action
 		var fileCount = 0;
-		act := func (string, string) {
+		var act ActionFn = func (string, string) error {
     		fileCount++
+			return nil
 		}
 
 		// setup the id function
-		id := func(path string, d fs.DirEntry, err error) error {
+		var id fs.WalkDirFunc = func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -134,7 +139,7 @@ var copyCmd = &cobra.Command{
 		
 		// setup the action
 		var fileCount = 0
-		act := func(src string, dst string ) error {
+		var act ActionFn = func(src string, dst string ) error {
 			err := copyFile(src, dst)
 			if err != nil {
 				return err
@@ -144,7 +149,7 @@ var copyCmd = &cobra.Command{
 		}
 
 		// setup the id function
-		id := func(path string, d fs.DirEntry, err error) error {
+		var id fs.WalkDirFunc = func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -153,7 +158,12 @@ var copyCmd = &cobra.Command{
 			}
 			tgtExt := filepath.Ext(d.Name())
 			if ext == tgtExt {
-				out := filepath.Join(outpath, d.Name())
+				var fileName string
+				err, fileName = generateDst(outpath,d.Name())
+				if err != nil {
+					return err
+				}
+				out := filepath.Join(outpath, fileName)
 				act(path, out)
 			}
 			//fmt.Printf("%s %s : %s\n", d.Name(), ext, tgtExt)
@@ -175,35 +185,53 @@ var copyCmd = &cobra.Command{
 ** Utility functions
 */
 
-type IdFn func(string,string) error
-type ActionFn func(string, string) error
+// handle the file collisions by altering the file name
+func generateDst (path, file string) ( error, string ) {
 
+	// if there isn't a duplicate just use the given
+	tester := filepath.Join(path, file)
+	_, err := os.Stat(tester)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, file
+	}
+
+	// prepend a number
+	for count := 1; count < 1000; count++ {
+		candidate := fmt.Sprintf("%d_%s", count, file)
+		tester = filepath.Join(path, candidate)
+		_, err := os.Stat(tester)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, candidate
+		}
+	}
+	err = fmt.Errorf("Too many duplicate file names: %s", tester) 
+	return err, ""
+}
+
+//copies src to dst
 func copyFile( src, dst string) error {
-	fmt.Printf("%s %s\n", src, dst)
 	srcFile, err := os.Open(src)
 	if err != nil {
-		fmt.Println("err 1")
 		return err
 	}
 	defer srcFile.Close()
 
+	
+	// ##### need to handle existing file case
 	dstFile, err := os.Create(dst)
 	if err != nil {
-		fmt.Println("err 2")
 		return err
 	}
 	defer dstFile.Close()
 
 	_, err = io.Copy(dstFile, srcFile)
 	if err != nil {
-		fmt.Println("err 3")
 		return err
 	}
 
 	// flush to ensure data on disk
 	err = dstFile.Sync()
 	if err != nil {
-		fmt.Println("err 4")
 		return err
 	}
 
